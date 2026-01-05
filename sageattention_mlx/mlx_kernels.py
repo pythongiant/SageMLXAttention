@@ -88,6 +88,7 @@ def mlx_flash_attention_block(
     sm_scale: float = 1.0,
     causal: bool = False,
     attn_mask: Optional[mx.array] = None,
+    use_blockwise_quant: bool = False,
 ) -> mx.array:
     """
     Block-wise flash attention implementation for MLX with streaming softmax.
@@ -100,6 +101,7 @@ def mlx_flash_attention_block(
     Advantages:
     - Reduces peak memory usage compared to computing full (Lq x Lk) scores.
     - Numerically stable (log-sum-exp style merging of blocks).
+    - Optional blockwise quantization to reduce memory bandwidth.
 
     Limitations / Notes:
     - `causal=True` is supported in the sense that we apply a mask per key-block
@@ -111,9 +113,11 @@ def mlx_flash_attention_block(
       block_size: key/query tiling size
       sm_scale: softmax scaling factor (usually 1/sqrt(D))
       causal: whether to apply causal masking
+      use_blockwise_quant: whether to use blockwise INT8 quantization
 
     Returns:
       out: (B, H, L, D)
+      lse: (B, H, L) log-sum-exp values
     """
     B, H, Lq, D = q.shape
     _, _, Lk, _ = k.shape
@@ -122,12 +126,39 @@ def mlx_flash_attention_block(
     # LSE (log-sum-exp) accumulator per query position
     lse = mx.zeros((B, H, Lq), dtype=mx.float32)
 
-    # Precompute block boundaries for keys
+    # Precompute block boundaries for keys and queries
     k_block_ranges = list(range(0, Lk, block_size))
+    q_block_ranges = list(range(0, Lq, block_size))
 
-    for q_start in range(0, Lq, block_size):
+    # Optimization: Pre-quantize all Q blocks if using quantization
+    # This avoids redundant quantization work across k-block iterations
+    q_blocks_quantized = {}
+    if use_blockwise_quant:
+        for q_start in q_block_ranges:
+            q_end = min(q_start + block_size, Lq)
+            q_block = q[:, :, q_start:q_end, :]
+            
+            # Symmetric quantization with exp2 factor baked in (NVIDIA aligned)
+            q_block_scaled = q_block * (sm_scale * 1.44269504)
+            q_abs_max = mx.max(mx.abs(q_block_scaled), axis=(2, 3), keepdims=True)
+            q_scale = q_abs_max / 127.0
+            q_scale = mx.where(q_scale == 0, mx.ones_like(q_scale) * 1e-6, q_scale)
+            q_int = mx.round(q_block_scaled / q_scale).astype(mx.int8)
+            
+            q_blocks_quantized[q_start] = {
+                'q_int': q_int,
+                'q_scale': q_scale,
+            }
+
+    for q_start in q_block_ranges:
         q_end = min(q_start + block_size, Lq)
-        q_block = q[:, :, q_start:q_end, :]  # (B,H,Bq,D)
+        
+        if use_blockwise_quant:
+            # Use pre-computed quantization
+            q_int = q_blocks_quantized[q_start]['q_int']
+            q_scale = q_blocks_quantized[q_start]['q_scale']
+        else:
+            q_block = q[:, :, q_start:q_end, :]
 
         # Running accumulators for streaming softmax
         running_max: Optional[mx.array] = None      # (B,H,Bq)
@@ -142,8 +173,31 @@ def mlx_flash_attention_block(
             k_block = k[:, :, k_start:k_end, :]  # (B,H,Bk,D)
             v_block = v[:, :, k_start:k_end, :]  # (B,H,Bk,D)
 
-            # scores: (B,H,Bq,Bk)
-            scores = mx.matmul(q_block, k_block.transpose(0, 1, 3, 2)) * sm_scale
+            # Blockwise quantized scoring (optional) to reduce memory bandwidth
+            if use_blockwise_quant:
+                # K: use sm_scale=1.0 (unscaled)
+                k_abs_max = mx.max(mx.abs(k_block), axis=(2, 3), keepdims=True)
+                k_scale = k_abs_max / 127.0
+                k_scale = mx.where(k_scale == 0, mx.ones_like(k_scale) * 1e-6, k_scale)
+                k_int = mx.round(k_block / k_scale).astype(mx.int8)
+
+                try:
+                    # Integer matmul: convert to float for MLX matmul
+                    q_f32 = q_int.astype(mx.float32)
+                    k_f32 = k_int.astype(mx.float32)
+                    scores_int = mx.matmul(q_f32, k_f32.transpose(0, 1, 3, 2))
+                    # Apply scale multiplication: q_scale * k_scale (already includes sm_scale in q_scale)
+                    combined_scale = q_scale * k_scale
+                    scores = scores_int * combined_scale
+                except Exception:
+                    # Fallback: dequantize and use float matmul
+                    q_deq = q_int.astype(mx.float32) * q_scale
+                    k_deq = k_int.astype(mx.float32) * k_scale
+                    scores = mx.matmul(q_deq, k_deq.transpose(0, 1, 3, 2))
+            else:
+                q_block = q[:, :, q_start:q_end, :]
+                # scores: (B,H,Bq,Bk)
+                scores = mx.matmul(q_block, k_block.transpose(0, 1, 3, 2)) * sm_scale
 
             # Apply causal mask if requested
             if causal:
