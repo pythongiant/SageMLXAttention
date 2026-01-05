@@ -84,19 +84,6 @@ sageattention_mlx/
 └── setup.py              # Installation script
 ```
 
-### Module Descriptions
-
-- **core.py**: Main entry point with `sageattn_mlx()` function that handles outlier smoothing, quantization, and attention computation.
-
-- **quant.py**: Quantization implementations:
-  - `quantize_qk()`: INT8 quantization for Q and K (per-block or per-thread)
-  - `quantize_pv()`: FP8 or lower precision quantization for P×V
-  - Dequantization functions for reverse operations
-
-- **mlx_kernels.py**: Placeholder for custom Metal kernel implementations:
-  - `mlx_quantized_matmul()`: Optimized Q×K computation
-  - `mlx_flash_attention_block()`: Block-wise attention processing
-
 ## Parameters
 
 ### `sageattn_mlx()`

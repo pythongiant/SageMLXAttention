@@ -7,13 +7,14 @@ using MLX as the backend, implementing the SageAttention algorithm.
 Key optimizations from NVIDIA SageAttention:
 1. K smoothing via mean subtraction (reduces outliers, improves quantization)
 2. LSE correction when smooth_k is enabled
-3. Leverages mx.fast.scaled_dot_product_attention for fused Metal kernel
+3. Optimized Metal kernel implementation via mlx_kernels
 4. Optional quantized path for memory-bound scenarios
 """
 
 import mlx.core as mx
 from typing import Optional, Tuple, Union, Dict
 import math
+from .mlx_kernels import mlx_sage_attention, SageAttentionConfig
 
 
 class KVCache:
@@ -248,11 +249,15 @@ def sageattn_mlx(
             lse_correction = mx.matmul(q, km_t).squeeze(-1)  # (B, H, Lq)
             lse_correction = lse_correction.astype(mx.float32)
 
-    # Perform attention computation
+    # Perform attention computation using optimized Metal kernels
     if use_fast_sdpa and not return_lse and attn_mask is None:
-        # Use optimized fused kernel
-        output = _fast_attention(q, k, v, sm_scale=sm_scale, is_causal=is_causal)
-        lse = None
+        # Use optimized streaming kernel from mlx_kernels
+        cfg = SageAttentionConfig(sm_scale=sm_scale if sm_scale != 1.0 / math.sqrt(head_dim) else None)
+        output, lse = mlx_sage_attention(q, k, v, cfg=cfg)
+        # Convert output back to input dtype
+        output = output.astype(q.dtype)
+        if not return_lse:
+            lse = None
     else:
         # Use manual attention for LSE or custom masks
         output, lse = _attention_with_lse(
@@ -279,17 +284,13 @@ def _fast_attention(
     is_causal: bool = False
 ) -> mx.array:
     """
-    Fast attention using mx.fast.scaled_dot_product_attention.
+    Fast attention using optimized Metal kernels.
 
     This is the recommended path for most use cases as it uses
-    a fused Metal kernel optimized for Apple Silicon.
+    streaming softmax kernels optimized for Apple Silicon.
     """
-    # mx.fast.scaled_dot_product_attention expects (B, H, L, D)
-    output = mx.fast.scaled_dot_product_attention(
-        q, k, v,
-        scale=sm_scale,
-        mask=None  # Causal is handled internally if needed
-    )
+    cfg = SageAttentionConfig(sm_scale=sm_scale)
+    output, _ = mlx_sage_attention(q, k, v, cfg=cfg)
     return output
 
 

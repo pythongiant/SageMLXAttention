@@ -1,5 +1,5 @@
 """
-Detailed profiling of mlx_flash_attention_block to identify performance bottlenecks.
+Detailed profiling of optimized SageAttention Metal kernels.
 """
 
 import mlx.core as mx
@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sageattention_mlx.mlx_kernels import mlx_flash_attention_block
+from sageattention_mlx.mlx_kernels import mlx_sage_attention, SageAttentionConfig
 
 
 def profile_attention_block(
@@ -21,10 +21,10 @@ def profile_attention_block(
     block_size=128,
     num_iterations=5,
 ):
-    """Profile mlx_flash_attention_block to identify bottlenecks."""
+    """Profile mlx_sage_attention kernel to identify performance characteristics."""
     
     print("=" * 90)
-    print("mlx_flash_attention_block Profiling")
+    print("SageAttention Metal Kernel Profiling")
     print("=" * 90)
     
     print(f"\nConfiguration:")
@@ -37,72 +37,38 @@ def profile_attention_block(
     print(f"  Iterations:     {num_iterations}")
     
     # Create test data
-    q = mx.random.normal((batch_size, num_heads, seq_len, head_dim), dtype=mx.float32)
-    k = mx.random.normal((batch_size, num_heads, seq_len, head_dim), dtype=mx.float32)
-    v = mx.random.normal((batch_size, num_heads, seq_len, head_dim), dtype=mx.float32)
+    q = mx.random.normal((batch_size, num_heads, seq_len, head_dim), dtype=mx.float16)
+    k = mx.random.normal((batch_size, num_heads, seq_len, head_dim), dtype=mx.float16)
+    v = mx.random.normal((batch_size, num_heads, seq_len, head_dim), dtype=mx.float16)
     
     mx.eval(q, k, v)
     
     sm_scale = 1.0 / (head_dim ** 0.5)
     
     print("\n" + "=" * 90)
-    print("Test 1: Standard Attention (use_blockwise_quant=False)")
+    print("Test: Optimized Streaming Attention (mlx_sage_attention)")
     print("=" * 90)
     
-    times_standard = []
+    times = []
+    cfg = SageAttentionConfig(block_q=block_size, block_k=block_size, sm_scale=sm_scale)
+    
     for i in range(num_iterations):
         start = time.perf_counter()
-        output, lse = mlx_flash_attention_block(
-            q, k, v,
-            block_size=block_size,
-            sm_scale=sm_scale,
-            causal=False,
-            use_blockwise_quant=False,
-        )
+        output, lse = mlx_sage_attention(q, k, v, cfg=cfg)
         mx.eval(output, lse)
         elapsed = time.perf_counter() - start
-        times_standard.append(elapsed)
+        times.append(elapsed)
         print(f"  Iteration {i+1}: {elapsed*1000:.3f} ms")
     
-    avg_standard = np.mean(times_standard)
-    std_standard = np.std(times_standard)
-    print(f"  Average: {avg_standard*1000:.3f} ± {std_standard*1000:.3f} ms")
-    
-    print("\n" + "=" * 90)
-    print("Test 2: Blockwise Quantized Attention (use_blockwise_quant=True)")
-    print("=" * 90)
-    
-    times_quant = []
-    for i in range(num_iterations):
-        start = time.perf_counter()
-        output, lse = mlx_flash_attention_block(
-            q, k, v,
-            block_size=block_size,
-            sm_scale=sm_scale,
-            causal=False,
-            use_blockwise_quant=True,
-        )
-        mx.eval(output, lse)
-        elapsed = time.perf_counter() - start
-        times_quant.append(elapsed)
-        print(f"  Iteration {i+1}: {elapsed*1000:.3f} ms")
-    
-    avg_quant = np.mean(times_quant)
-    std_quant = np.std(times_quant)
-    print(f"  Average: {avg_quant*1000:.3f} ± {std_quant*1000:.3f} ms")
+    avg_time = np.mean(times)
+    std_time = np.std(times)
+    print(f"  Average: {avg_time*1000:.3f} ± {std_time*1000:.3f} ms")
     
     print("\n" + "=" * 90)
     print("Summary")
     print("=" * 90)
-    print(f"Standard Attention:        {avg_standard*1000:.3f} ms (baseline)")
-    print(f"Quantized Attention:       {avg_quant*1000:.3f} ms")
-    print(f"Overhead:                  {(avg_quant/avg_standard - 1)*100:.1f}%")
-    print(f"Speedup:                   {avg_standard/avg_quant:.2f}x")
-    
-    if avg_quant < avg_standard:
-        print(f"✅ Quantized is FASTER by {(avg_standard - avg_quant)*1000:.3f} ms")
-    else:
-        print(f"❌ Quantized is SLOWER by {(avg_quant - avg_standard)*1000:.3f} ms")
+    print(f"Throughput:  {batch_size * num_heads * seq_len * seq_len * head_dim / (avg_time * 1e9):.2f} GFLOPS")
+    print(f"Memory BW:   {batch_size * num_heads * seq_len * head_dim * 3 * 2 / (avg_time * 1e9):.2f} GB/s")
 
 
 if __name__ == "__main__":
