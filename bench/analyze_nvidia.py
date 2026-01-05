@@ -71,17 +71,6 @@ def analyze_quantization_approach():
     print(f"  Expected ratio (sm_scale * exp2): {expected_ratio:.6f}")
     print(f"  Match: {'✅' if abs(scale_ratio - expected_ratio) < expected_ratio * 0.1 else '❌'}")
     
-    print(f"\n--- Comparison: Symmetric vs Min-Max Quantization ---")
-    print(f"  Our approach (symmetric): Uses max(abs(x)) / 127")
-    print(f"  NVIDIA approach (symmetric): Uses max(abs(x)) / 127")
-    print(f"  Min-max (old approach): Uses (max - min) / 255")
-    print(f"  ")
-    print(f"  Symmetric beneifts:")
-    print(f"    - Single scale factor (not min+max)")
-    print(f"    - More efficient (1 value vs 2)")
-    print(f"    - Better for INT8 range (-128 to 127)")
-    print(f"    - Easier to bake into quantization (no zero_point adjustment)")
-
 
 def analyze_nvidia_reference():
     """Detailed analysis of NVIDIA's implementation."""
@@ -91,46 +80,6 @@ def analyze_nvidia_reference():
     print("NVIDIA SAGEATTENTION REFERENCE ANALYSIS")
     print("=" * 90)
     
-    print(f"""
-Based on examination of NVIDIA SageAttention source code:
-
-1. QUANTIZATION GRANULARITY (triton/quant_per_block.py)
-   - Per-block: One scale per (batch, head, block)
-   - Scale computation: scale = max(abs(x)) / 127.0 (symmetric)
-   - Rounding: round_nearest_even or manual rounding
-   - Data type: INT8 (-128 to 127)
-
-2. SM_SCALE HANDLING (core.py quantization dispatch)
-   - Q quantization: Input = x * sm_scale * 1.44269504 (exp2 factor)
-   - K quantization: Input = x (no sm_scale, sm_scale=1.0)
-   - This is handled INSIDE the quantization kernel, not after
-   - Both use symmetric: scale = max(abs(input)) / 127
-
-3. SCALE MULTIPLICATION IN ATTENTION
-   - Attention scores: qk = dot(q_int8, k_int8) * (q_scale * k_scale)
-   - Both scales multiplied together (already baked into Q)
-   - Result contains: sm_scale * 1.44269504 factor implicitly
-
-4. SOFTMAX OPTIMIZATION
-   - Uses exp() in streaming softmax (not exp2)
-   - exp2 factor helps with precision when baked into Q
-   - Does NOT use exp2((x) * ln(2)) in softmax kernel
-
-5. KEY DIFFERENCES FROM OLD MIN-MAX APPROACH
-   - Symmetric (1 scale) vs asymmetric (2 scales)
-   - Bakes sm_scale into Q quantization (kernel fusion opportunity)
-   - Exp2 factor for numerical stability, not for softmax speed
-
-OUR MLX IMPLEMENTATION - ALIGNMENT STATUS
-   ✅ Symmetric quantization: max(abs(x)) / 127
-   ✅ Q baking: sm_scale * 1.44269504 applied before quantization
-   ✅ K unscaled: Uses sm_scale=1.0
-   ✅ Scale multiplication: q_scale * k_scale
-   ✅ Zero points: All zeros (symmetric)
-   ✅ Pre-quantize Q blocks: Caching to avoid redundant work
-   ⚠️  No true int32 accumulation (MLX limitation)
-   ⚠️  No exp2 optimization in softmax (MLX limitation)
-""")
 
 
 def profile_scale_computation():

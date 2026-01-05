@@ -177,7 +177,6 @@ def benchmark_suite(
             "PyTorch MPS": pytorch_time,
         }
         best = min(times, key=times.get)
-        print(f"\n  🏆 Best Performance: {best}")
         
     else:
         print("\n" + "=" * 80)
