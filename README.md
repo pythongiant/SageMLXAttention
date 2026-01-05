@@ -25,13 +25,6 @@ Apple Silicon optimized implementation of SageAttention using MLX framework.
 - [x] Basic MLX kernel implementations
 - [x] Example attention layer
 
-### Planned
-- [ ] Custom Metal kernels for FP8 operations
-- [ ] Block-wise flash attention optimization
-- [ ] Comprehensive benchmarking
-- [ ] Integration with popular models (Llama, Mistral, etc.)
-- [ ] Performance optimization pass
-
 ## Installation
 
 ### Requirements
