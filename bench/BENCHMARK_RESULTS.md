@@ -12,12 +12,12 @@
 
 | seq_len | Manual Attention | MLX SDPA | SageAttn MLX | vs Manual | vs SDPA |
 |---------|-----------------|----------|--------------|-----------|---------|
-| 256     | 1.61 ms         | 0.96 ms  | 1.09 ms      | 1.47x     | 0.88x   |
-| 512     | 3.39 ms         | 2.38 ms  | 2.78 ms      | 1.22x     | 0.86x   |
-| 1024    | 9.83 ms         | 4.82 ms  | 4.40 ms      | 2.23x     | **1.09x** |
-| 2048    | 19.46 ms        | 7.53 ms  | 7.37 ms      | 2.64x     | **1.02x** |
-| 4096    | 68.74 ms        | 27.20 ms | 27.75 ms     | 2.48x     | 0.98x   |
-| 8192    | 298.87 ms       | 107.77 ms| 108.46 ms    | 2.76x     | 0.99x   |
+| 256     | 1.12 ms         | 0.96 ms  | 0.96 ms      | 1.17x     | **1.00x** |
+| 512     | 2.91 ms         | 2.32 ms  | 2.49 ms      | 1.17x     | 0.93x   |
+| 1024    | 5.23 ms         | 2.90 ms  | 2.95 ms      | 1.78x     | 0.99x   |
+| 2048    | 13.58 ms        | 7.05 ms  | 7.24 ms      | 1.88x     | 0.97x   |
+| 4096    | 48.60 ms        | 27.19 ms | 27.47 ms     | 1.77x     | 0.99x   |
+| 8192    | 198.40 ms       | 107.51 ms| 108.24 ms    | 1.83x     | 0.99x   |
 
 ### Legend
 
@@ -31,18 +31,18 @@
 
 ### Performance
 
-1. **SageAttention MLX achieves near-parity with MLX native SDPA** across all sequence lengths.
+1. **SageAttention MLX achieves near-parity with MLX native SDPA** across all sequence lengths (0.93x-1.00x ratio).
 
-2. **At medium sequence lengths (1024-2048)**, SageAttention is actually **slightly faster** than base SDPA (1.02x-1.09x) due to the K smoothing optimization reducing numerical outliers.
+2. **At seq_len=256**, SageAttention achieves **exact parity** with SDPA (1.00x), matching the fused Metal kernel performance.
 
-3. **Compared to manual attention**, SageAttention provides **2-3x speedup** at longer sequence lengths.
+3. **Compared to manual attention**, SageAttention provides **1.2x-1.9x speedup** across all sequence lengths.
 
 ### Accuracy
 
 | Test | Max Diff | Mean Diff |
 |------|----------|-----------|
-| SageAttn (no smooth) vs Standard | ~1e-6 | ~4e-8 |
-| SageAttn (smooth_k) vs Standard | ~1e-6 | ~4e-8 |
+| SageAttn (no smooth) vs Standard | 8.64e-7 | 3.70e-8 |
+| SageAttn (smooth_k) vs Standard | 8.05e-7 | 3.71e-8 |
 
 All differences are within floating-point tolerance, confirming numerical correctness.
 
